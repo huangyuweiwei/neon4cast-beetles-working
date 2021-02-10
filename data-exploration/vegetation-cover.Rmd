@@ -1,0 +1,76 @@
+---
+title: "vegetation-cover"
+author: "Millie Chapman"
+date: "2/10/2021"
+output: github_document
+---
+
+```{r}
+library(tidyverse)
+library(neonstore)
+library(ISOweek)
+source("../R/resolve_taxonomy.R")
+```
+
+## Plant presence and percent cover
+
+*Description:* "Plant species cover-abundance and presence observed in multi-scale plots. Plant species and associated percent cover in 1m2 subplots and plant species presence in 10m2 and 100m2 subplots are reported from 400m2 plots. Archived plant vouchers and foliar tissue support the data and additional analyses."
+
+```{r}
+# download all of the beetle data
+neonstore::neon_download(product="DP1.10058.001")
+# importing into database
+neonstore::neon_store(product="DP1.10058.001")
+```
+
+```{r}
+vegetation_10m <- neon_table("div_10m2Data100m2Data")
+vegetation_1m <- neon_table("div_1m2Data")
+```
+
+For 10m plots, get species richness per year
+```{r}
+vegetation_10m %>% 
+  select(siteID, taxonID, endDate) %>%
+  mutate(year = format(endDate, format = "%Y")) %>%
+  distinct() %>%
+  count(siteID, year) %>% 
+  rename(richness = n)  %>%
+  ungroup()
+```
+
+For 1m plot, get total perc. cover per year
+```{r}
+vegetation_1m %>% 
+  select(siteID, subplotID, taxonID, percentCover, endDate) %>%
+  mutate(year = format(endDate, format = "%Y")) %>%
+  distinct() %>%
+  group_by(subplotID, siteID, endDate) %>%
+  summarise(percentCover = sum(percentCover)/100) %>%
+  count(siteID, year) %>% 
+  rename(richness = n)  %>%
+  ungroup()
+```
+
+
+
+```{r}
+sorting <- neon_table("bet_sorting")
+para <- neon_table("bet_parataxonomistID") # refine taxonomy
+expert <- neon_table("bet_expertTaxonomistIDProcessed")
+field <- neon_table("bet_fielddata")
+
+
+#### Generate derived richness table  ####################
+beetles <- resolve_taxonomy(sorting, para, expert) %>% 
+  mutate(iso_week = ISOweek::ISOweek(collectDate),
+         time = ISOweek::ISOweek2date(paste0(iso_week, "-1")))
+
+richness <- beetles %>%  
+  select(taxonID, siteID, collectDate, time) %>%
+  distinct() %>%
+  count(siteID, time) %>% 
+  rename(richness = n)  %>%
+  ungroup()
+```
+
