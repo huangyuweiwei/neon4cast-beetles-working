@@ -1,0 +1,60 @@
+---
+title: "Humidity download"
+author: "Hudson Northrop"
+date: "2/10/21"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(neonstore)
+library(ISOweek)
+source("R/resolve_taxonomy.R")
+```
+
+
+Get beetle target data
+```{r}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+
+Download weather/humidity data
+```{r}
+##Get humidity table
+humidity <- neon_read(table = "wss_daily_humid-basic", product = "DP4.00001.001")
+
+```
+Filter humidity data for beetle sites
+```{r}
+##Get list of sites with beetle data
+sites <- unique(targets$siteID)
+
+##Grab relevant columns of data and filter for data at beetle sites
+humidity_sites <- humidity %>%
+  select(date, wssRHMean, wssRHStdErMean, siteID) %>%
+  filter(siteID %in% sites)
+
+##Get dates of the beetle data
+dates <- unique(targets$time)
+
+##Filter humidity data for dates of beetle data
+humidity_sites_dates <- humidity_sites %>%
+  filter(date %in% dates) 
+
+##Join the targets with the beetle data
+targets_plus_humidity <- left_join(targets, humidity, by = c("time" = "date", "siteID" = "siteID"))
+```
+This generates a dataframe identical to the "targets" file of beetle abundance and richness, however it also contains the mean relative humidity recorded for each day and the standard error of that mean. Many of the rows of data do not have an RH observation for that particular date of beetle data. I think it's worth reconsidering how to best summarize the RH data for each 2 week period, simply recording the RH on the day reported might not make the most sense, it may make more sense to associate a 2-week average of the RH's with each beetle observation. Doing something along those lines sounded a bit more complicated and difficult to work out, so for this I just provide the "day of" measurements, but would be happy to re-evaluate and process the data to better summarize it.
+
+
+In case we decide it's best to summarize data using a different method, which seems likely, I have also created a dataframe of all the humidity data at the beetle sites, which could be processed differently.
+```{r}
+##Dataframe with all RH measurements at beetle sites, to possibly reprocess later
+
+all_humidities <- left_join(humidity_sites, targets, by = c("date" = "time", "siteID" = "siteID"))
+```
+
+
