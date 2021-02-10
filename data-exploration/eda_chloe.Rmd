@@ -1,0 +1,275 @@
+---
+title: "Data_Exploration"
+author: "Chloe Cho"
+date: "2/8/2021"
+output: github_document
+---
+
+```{r, eval=FALSE}
+library(neonstore)
+library(dplyr)
+library(fable)
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+
+```
+
+```{r}
+beetles <- neon_read(table = "bet_expertTaxonomistIDProcessed-basic", product = "DP1.10022.001")
+head(beetles)
+```
+# Variables of Interest
+- Agriculture: tillage, chemicalApplication, plantAddition, plantReduction, irrigation, grazing
+
+# Site Notes
+- JERC: Jones Ecological Research Center, Georgia (cultivated crops, forest)  
+- KONA/KONZ: Konza Prairie Biological Station, Kansas (grasslands, forests, agricultural land cover, one of the largest areas of unplowed tallgrass prairie)  
+- STER: North Sterling, Colorado (agriculture)  
+- MCDI: McDiffett Creek, Kansas (aquatic field site surrounded by prairie, grazing, historically cultivated fields)
+- UNDE: UNDERC (University of Notre Dame Environmental Research Center), Michigan (forest, historic clearcutting)  
+- STEI: Steigerwaldt Land Services, Wisconsin (logging, farmland)
+- LAJA: Lajas Experimental Station, Puerto Rico (research area for developing agriculture)
+- SRER: Santa Rita Experimental Range, Arizona (rangeland)
+
+## Site Management Data
+Includes other variables that may be interesting, but not related to agriculture - construction of roads (asphalt, gravel), wildfires.
+```{r}
+# site management data from NEON
+site_man <- neon_read(table = "sim_eventData-basic", product = "DP1.10111.001")
+head(site_man)
+```
+# Agriculture Events Grouped
+# Individual Disturbance Types
+
+## Tillage
+Tillage is only recorded at a few sites.
+
+```{r}
+tillage <- site_man %>%
+  filter(methodTypeChoice == "tillage-conventional" | methodTypeChoice == "tillage-conservation" | methodTypeChoice == "tillage-other")
+tillage_sites <- tillage$siteID
+tillage_sites
+```
+
+```{r}
+tillage_JERC_cons <- tillage %>%
+  filter(siteID == "JERC") %>%
+  filter(methodTypeChoice == "tillage-conservation")
+
+tillage_JERC_conv <- tillage %>%
+  filter(siteID == "JERC") %>%
+  filter(methodTypeChoice == "tillage-conventional")
+
+
+beetles %>%
+  filter(siteID == "JERC") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(tillage_JERC_cons$startDate), color = "red") +
+  geom_vline(xintercept = c(tillage_JERC_cons$endDate), linetype = "dotted", color = "blue") +
+  ggtitle("Abundance for Conservation Tillage Events (JERC)")
+
+
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "JERC") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(tillage_JERC_conv$startDate), color = "red") +
+  geom_vline(xintercept = c(tillage_JERC_conv$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Conventional Tillage Events (JERC)")
+```
+
+## Plant Addition
+Report only during initial transplant/seeding event, e.g. annually for planting of annual agricultural crops.
+```{r}
+plantAddition <- site_man %>%
+  filter(eventType == "plantAddition")
+plantAdditionSites <- plantAddition$siteID
+plantAdditionSites
+```
+
+```{r}
+plantAdditionJERC <- plantAddition %>%
+  filter(siteID == "JERC") %>%
+  filter(eventType == "plantAddition")
+```
+
+```{r}
+plantAdditionSTER <- plantAddition %>%
+  filter(siteID == "STER") %>%
+  filter(eventType == "plantAddition")
+```
+
+
+```{r}
+beetles %>%
+  filter(siteID == "JERC") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(plantAdditionJERC$startDate), color = "red") +
+  geom_vline(xintercept = c(plantAdditionJERC$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Plant Addition Events (JERC)")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "STER") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(plantAdditionSTER$startDate), color = "red") +
+  geom_vline(xintercept = c(plantAdditionSTER$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Plant Addition Events (STER)")
+```
+
+## Plant Reduction
+Physical removal of plants.
+
+```{r}
+plantReduction <- site_man %>%
+  filter(eventType == "plantReduction")
+plantReductionSites <- plantReduction$siteID
+sort(plantReductionSites)
+```
+
+```{r}
+plantReductionJERC <- plantReduction %>%
+  filter(siteID == "JERC") %>%
+  filter(eventType == "plantReduction")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "JERC") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(plantReductionJERC$startDate), color = "red") +
+  geom_vline(xintercept = c(plantReductionJERC$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Plant Reduction Events (JERC)")
+```
+
+```{r}
+plantReductionTREE <- plantReduction %>%
+  filter(siteID == "TREE") %>%
+  filter(eventType == "plantReduction")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "TREE") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(plantReductionTREE$startDate), color = "red") +
+  geom_vline(xintercept = c(plantReductionTREE$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Plant Reduction Events (TREE)")
+```
+
+## Chemical Application (fertilizer, pesticide, herbicide, etc.)
+Used when introduction of these chemicals will impact NEON sampling areas. 
+
+```{r}
+chemicalApp <- site_man %>%
+  filter(eventType == "chemicalApplication")
+chemicalAppSites <- chemicalApp$siteID
+chemicalAppSites
+```
+
+```{r}
+chemicalAppJERC <- chemicalApp %>%
+  filter(siteID == "JERC") %>%
+  filter(eventType == "chemicalApplication")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "JERC") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(chemicalAppJERC$startDate), color = "red") +
+  geom_vline(xintercept = c(chemicalAppJERC$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Chemical Application Events (JERC)")
+```
+
+## Irrigation 
+Intentional irrigation of NEON sampling areas. 
+
+```{r}
+irrigation <- site_man %>%
+  filter(eventType == "irrigation")
+irrigationSites <- irrigation$siteID
+sort(irrigationSites)
+```
+
+```{r}
+irrigationLAJA <- irrigation %>%
+  filter(siteID == "LAJA") %>%
+  filter(eventType == "irrigation")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "LAJA") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(irrigationLAJA$startDate), color = "red") +
+  geom_vline(xintercept = c(irrigationLAJA$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Irrigation Events (LAJA)")
+```
+Looks like no beetle data has been collected since 2018 from this site. 
+
+## Grazing
+Intentional human introduction of animals to NOEN sites. 
+
+```{r}
+grazing <- site_man %>%
+  filter(eventType == "grazing")
+grazingSites <- grazing$siteID
+sort(grazingSites)
+```
+
+```{r}
+grazingKONZ <- grazing %>%
+  filter(siteID == "KONZ") %>%
+  filter(eventType == "grazing")
+
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "KONZ") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(grazingKONZ$startDate), color = "red") +
+  geom_vline(xintercept = c(grazingKONZ$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Grazing Events (KONZ)")
+```
+
+```{r}
+grazingSRER <- grazing %>%
+  filter(siteID == "SRER") %>%
+  filter(eventType == "grazing")
+```
+
+```{r}
+beetles %>%
+  filter(siteID == "SRER") %>%
+  count(collectDate) %>%
+  ggplot(aes(x = collectDate, y = n)) +
+  geom_line(color = "black") +
+  geom_vline(xintercept = c(grazingSRER$startDate), color = "red") +
+  geom_vline(xintercept = c(grazingSRER$endDate), linetype = "dotted", color = "blue") + 
+  ggtitle("Abundance for Grazing Events (SRER)")
+```
+
