@@ -17,7 +17,7 @@ neon_store(product = "DP1.10022.001")
 
 ## Load data from raw files
 sorting <- neon_table("bet_sorting")
-para <- neon_table("bet_parataxonomistID")
+para <- neon_table("bet_parataxonomistID") # refine taxonomy
 expert <- neon_table("bet_expertTaxonomistIDProcessed")
 field <- neon_table("bet_fielddata")
 
@@ -66,12 +66,6 @@ targets <- full_join(abund, richness)
 ##  Write out the targets
 write_csv(targets, "beetles-targets.csv.gz")
 
-## Publish the targets to EFI.  Assumes aws.s3 env vars are configured.
-source("R/publish.R")
-publish(code = c("02_targets.R", "R/resolve_taxonomy.R"),
-        data_out = "beetles-targets.csv.gz",
-        prefix = "beetles/",
-        bucket = "targets")
 
 
 

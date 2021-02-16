@@ -84,5 +84,3 @@ publish(code = "03_forecast.R",
         prefix = "beetles/",
         bucket = "forecasts")
 
-
-

@@ -17,7 +17,7 @@ library(lubridate)
 library(dplyr)
 ```
 
-Null forecast function
+Null forecast function (Seasonal Niiave?)
 ```{r}
 null_forecast <- function(targets, forecast_year = 2020){
   ## Forecast is just based on historic mean/sd by siteID & week
@@ -132,28 +132,84 @@ forecast %>%
 ```
 
 
-Explore other models
+Explore other simple forecasting methods: 
+
+
+
+Mean forecast:
+$\hat{Y}_{T+h|T} = \bar{Y}$
 
 ```{r}
-targets_ts <- targets %>%
-  select(siteID, time, richness) %>%
-  mutate(time = as.Date(time)) %>%
-  #separate(iso_week, into = c("year", "week", "day")) %>%
-  filter(siteID %in% c("DSNY", "OSBS"))
-
-targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
-
-autoplot(targets_tsb)
-
-
-targets_tsb %>% 
-  fill_gaps(.full = TRUE) %>%
-  model(ets = ETS(box_cox(richness, 0.3)),
-        arima = ARIMA(log(richness)),
-        snaive = SNAIVE(richness)
-  ) %>%
-  forecast(h = "2 years") %>% 
-  autoplot(level = NULL)
+targets_tsb %>% model(MEAN(targets_tsb))
 ```
+
+Naïve method
+$\hat{Y}_{T+h|T} = Y_T$
+
+```{r}
+targets_tsb %>% model(NAIVE(targets_tsb))
+```
+
+Seasonal naïve method
+$\hat{Y}_{T+h|T} = Y_{T+h-m(k+1)}$
+
+```{r}
+targets_tsb %>% model(SNAIVE(targets_tsb ~ lag("year")))
+```
+
+Drift method: 
+
+```{r}
+targets_tsb %>% model(RW(targets_tsb ~ drift()))
+```
+
+```{r}
+train <- targets_tsb %>%
+  filter_index("2016-01" ~ "2018-12") %>% arrange(time) %>%
+  group_by_key() %>%
+  fill_gaps() %>%
+  tidyr::fill(richness, .direction = "down")
+
+
+train %>%
+  model(
+    ets = ETS(richness),
+    arima = ARIMA(richness),
+    snaive = SNAIVE(richness)
+  ) %>%
+  mutate(mixed = (ets + arima + snaive) / 3) %>%
+  forecast(h = "10 months") %>%
+  hilo() %>%
+  filter(siteID == "ABBY") %>%
+  autoplot(`.mean`)
+  
+
+
+# Fit the models
+richness_fit <- train %>%
+  #drop_na() %>%
+  model(
+    Mean = MEAN(train),
+    `Naïve` = NAIVE(train),
+    `Seasonal naïve` = SNAIVE(train)
+  )
+# Generate forecasts for 14 quarters
+richness_fc <- richness_fit %>% forecast(h = 12)
+# Plot forecasts against actual values
+richness_fc %>%
+  autoplot(train, level = NULL) +
+  autolayer(
+    filter_index(targets_tsb, "2019-1" ~ "2019-12"),
+    color = "black"
+  ) +
+  labs(
+    y = "Megalitres",
+    title = "Forecasts for quarterly beer production"
+  ) +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+
+
 
 
