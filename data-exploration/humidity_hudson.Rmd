@@ -8,8 +8,7 @@ output: html_document
 ```{r}
 library(tidyverse)
 library(neonstore)
-library(ISOweek)
-source("R/resolve_taxonomy.R")
+
 ```
 
 
@@ -27,34 +26,105 @@ Download weather/humidity data
 humidity <- neon_read(table = "wss_daily_humid-basic", product = "DP4.00001.001")
 
 ```
-Filter humidity data for beetle sites
+
+Join humidity table and targets table
 ```{r}
-##Get list of sites with beetle data
-sites <- unique(targets$siteID)
-
-##Grab relevant columns of data and filter for data at beetle sites
-humidity_sites <- humidity %>%
-  select(date, wssRHMean, wssRHStdErMean, siteID) %>%
-  filter(siteID %in% sites)
-
-##Get dates of the beetle data
-dates <- unique(targets$time)
-
-##Filter humidity data for dates of beetle data
-humidity_sites_dates <- humidity_sites %>%
-  filter(date %in% dates) 
-
-##Join the targets with the beetle data
-targets_plus_humidity <- left_join(targets, humidity, by = c("time" = "date", "siteID" = "siteID"))
-```
-This generates a dataframe identical to the "targets" file of beetle abundance and richness, however it also contains the mean relative humidity recorded for each day and the standard error of that mean. Many of the rows of data do not have an RH observation for that particular date of beetle data. I think it's worth reconsidering how to best summarize the RH data for each 2 week period, simply recording the RH on the day reported might not make the most sense, it may make more sense to associate a 2-week average of the RH's with each beetle observation. Doing something along those lines sounded a bit more complicated and difficult to work out, so for this I just provide the "day of" measurements, but would be happy to re-evaluate and process the data to better summarize it.
-
-
-In case we decide it's best to summarize data using a different method, which seems likely, I have also created a dataframe of all the humidity data at the beetle sites, which could be processed differently.
-```{r}
-##Dataframe with all RH measurements at beetle sites, to possibly reprocess later
-
-all_humidities <- left_join(humidity_sites, targets, by = c("date" = "time", "siteID" = "siteID"))
+all_humidities <- humidity %>%
+  select(date, siteID, wssRHMean, wssRHMinimum, wssRHMaximum) %>%
+  left_join(targets, by = c("date" = "time", "siteID" = "siteID"))
 ```
 
+Summarize RH data at the 2-week level
+This is easiest at the Site Level
+```{r}
+##Select a site, for example 'BONA'
+bona <- all_humidities %>%
+  filter(siteID  == "BONA")
+##Filter for dates at which there is at least one richness or abundance observation
+dates <- bona %>%
+  mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
+  mutate("sum.na" = abundance.na + richness.na) %>%
+  filter(sum.na %in% c(0,1)) %>%
+  distinct(date)
 
+#Set up vectors to store 2 week info in
+meanRH <- NULL
+minRH <- NULL
+maxRH <- NULL
+
+#For loop that calculates the 2 week info, based on the last 2 weeks from each beetle measurement
+for(i in 1:length(dates$date)) {
+  a <- filter(bona, date %in% c(dates$date[i]-0:13 ))
+  meanRH[i] <- mean(a$wssRHMean, na.rm = TRUE)
+  minRH[i] <- min(a$wssRHMinimum, na.rm = TRUE)
+  maxRH[i] <- max(a$wssRHMaximum, na.rm = TRUE)
+}
+
+bona_final <- bona %>%
+  mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
+  mutate("sum.na" = abundance.na + richness.na) %>%
+  filter(sum.na %in% c(0,1)) %>%
+  select(siteID, date, richness, abundance) %>%
+  bind_cols("meanRH" = meanRH,"minRH" =  minRH,"maxRH"= maxRH)
+
+```
+
+Some basic EDA
+```{r}
+##Scatterplots of RH metrics and richness/abundance
+
+bona_final %>%
+  ggplot(aes(x = meanRH, y = richness)) +
+  geom_point() +
+  geom_smooth()
+
+bona_final %>%
+  ggplot(aes(x = minRH, y = richness)) +
+  geom_point() +
+  geom_smooth()
+
+bona_final %>%
+  ggplot(aes(x = maxRH, y = richness)) +
+  geom_point() +
+  geom_smooth()
+
+bona_final %>%
+  ggplot(aes(x = meanRH, y = abundance)) +
+  geom_point() +
+  geom_smooth()
+
+bona_final %>%
+  ggplot(aes(x = minRH, y = abundance)) +
+  geom_point() +
+  geom_smooth()
+
+bona_final %>%
+  ggplot(aes(x = maxRH, y = abundance)) +
+  geom_point() +
+  geom_smooth()
+
+```
+
+Looking at distributions
+```{r}
+bona_final %>%
+  ggplot(aes(x = richness)) +
+  geom_density()
+
+bona_final %>%
+  ggplot(aes(x = abundance)) +
+  geom_density()
+
+bona_final %>%
+  ggplot(aes(x = meanRH)) +
+  geom_density()
+
+bona_final %>%
+  ggplot(aes(x = minRH)) +
+  geom_density()
+
+bona_final %>%
+  ggplot(aes(x = maxRH)) +
+  geom_density()
+
+```
