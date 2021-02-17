@@ -1,0 +1,95 @@
+---
+title: "introductory forecasting"
+author: "Chloe Cho"
+date: "2/17/2021"
+output: github_document
+---
+
+```{r message=FALSE}
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+```
+
+
+```{r message=FALSE}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+
+```{r}
+targets_ts <- targets %>%
+  select(siteID, time, abundance) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
+  mutate(time = as.Date(time)) %>%
+  mutate(time = yearmonth(time)) %>% #month year to start...
+  group_by(time, siteID) %>%
+  summarise(abundance = mean(abundance, na.rm = TRUE))
+  #separate(iso_week, into = c("year", "week", "day")) %>%
+  # filter(siteID %in% c("DSNY", "OSBS"))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+targets_tsb
+```
+### Plot the data (visualize)
+
+```{r}
+targets_tsb %>%
+  filter(siteID == "ABBY") %>%
+  autoplot(abundance) +
+  labs(x = "time", title = "Abundance for ABBY")
+```
+
+### Define a model (specify)
+
+### Train the model (estimate)
+```{r}
+train <- targets_tsb %>%
+  group_by_key() %>%
+  fill_gaps() %>%
+  tidyr::fill(abundance, .direction = "down") %>%
+  filter(year(time) < 2020)
+```
+
+
+```{r}
+fit <- train %>%
+  model(NAIVE(abundance), 
+        MEAN(abundance),
+        SNAIVE(abundance))
+fit
+```
+
+### Produce forecasts (forecast)
+```{r}
+fit %>% forecast(h = "1 year")
+```
+
+```{r}
+fit %>%
+  forecast(h = "1 year") %>%
+  filter(siteID == "ABBY") %>%
+  autoplot(train, level=NULL) +
+  labs(x = "time", title = "Abundance for ABBY")
+```
+
+### Filling Gaps in Data
+"Satellite time series are often affected by permanent gaps like missing observations during winter periods. Often time series methods can not deal with missing observations and require gap-free data. This function fills winter gaps with a constant fill value or according to the approach described in Beck et al. (2006)."
+
+Can either fill with a constant value or a function used to compute fill values. 
+https://greenbrown.r-forge.r-project.org/man/FillPermanentGaps.html
+
+
+
+
+
+
+
+
