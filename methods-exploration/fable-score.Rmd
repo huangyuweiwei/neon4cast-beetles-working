@@ -1,0 +1,70 @@
+---
+title: "fable-scores"
+output: github_document
+---
+
+Working through fable forecast to EFI score...
+
+```{r}
+library(scoringRules)
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+```
+
+```{r message=FALSE}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+
+```{r}
+targets_ts <- targets %>%
+  select(siteID, time, richness) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
+  separate(iso_week, into = c("year", "week", "day"))  %>%
+  mutate(time = ISOweek::ISOweek2date(paste(year,week, "1", sep = "-")))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+```
+
+```{r}
+targets_tsb <- targets_tsb %>%
+  group_by_key() %>%
+  fill_gaps() %>%
+  tidyr::fill(richness, .direction = "down") 
+```
+
+```{r}
+train <- targets_tsb %>%
+  filter(year(time) < 2020) %>%
+  select(siteID, time, richness)
+```
+
+Trying simple arima model on richness
+```{r}
+fit <- train %>%
+  model(arima = ARIMA(richness)) 
+```
+
+Forecast! Gives a mean and distribution for ricness value weekly for 2020
+```{r cache = TRUE}
+fc <- fit %>%
+  forecast(h = "12 months",
+           simulate= TRUE,
+           iterations = 500) 
+```
+can calculate CRSP score but not in the same format as EFI scoring (one score per site for the whole year..)
+```{r cache=TRUE}
+ crsp_score <- fc  %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+```
+
+
+

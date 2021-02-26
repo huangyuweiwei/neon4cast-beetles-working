@@ -30,10 +30,11 @@ Make tsibble! (richness data)
 targets_ts <- targets %>%
   select(siteID, time, richness) %>%
   mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
-  mutate(time = as.Date(time)) %>%
-  mutate(time = yearmonth(time)) %>% #month year to start...
-  group_by(time, siteID) %>%
-  summarise(richness = mean(richness, na.rm = TRUE))
+  separate(iso_week, into = c("year", "week", "day")) 
+  mutate(time = as.Date(time)) #%>%
+ # mutate(time = yearmonth(time)) %>% #month year to start...
+ # group_by(time, siteID) %>%
+ # summarise(richness = mean(richness, na.rm = TRUE))
   #separate(iso_week, into = c("year", "week", "day")) %>%
   # filter(siteID %in% c("DSNY", "OSBS"))
 
@@ -43,8 +44,8 @@ targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
 ```{r}
 targets_tsb <- targets_tsb %>%
   group_by_key() %>%
-  fill_gaps() %>%
-  tidyr::fill(richness, .direction = "down") %>%
+  #fill_gaps() %>%
+  #tidyr::fill(richness, .direction = "down") %>%
   filter(year(time) < 2020)
 ```
 
