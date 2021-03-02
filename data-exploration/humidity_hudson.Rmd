@@ -22,6 +22,8 @@ targets <-  read_csv("beetles-targets.csv.gz")
 
 Download weather/humidity data
 ```{r}
+# download all of the weather data
+neonstore::neon_download(product="DP4.00001.001")
 ##Get humidity table
 humidity <- neon_read(table = "wss_daily_humid-basic", product = "DP4.00001.001")
 
@@ -31,17 +33,16 @@ Join humidity table and targets table
 ```{r}
 all_humidities <- humidity %>%
   select(date, siteID, wssRHMean, wssRHMinimum, wssRHMaximum) %>%
-  left_join(targets, by = c("date" = "time", "siteID" = "siteID"))
+  full_join(targets, by = c("date" = "time", "siteID" = "siteID"))
 ```
-
-Summarize RH data at the 2-week level
-This is easiest at the Site Level
+Create 2 functions that gather the rh data and compile into a 'targets' df 
 ```{r}
-##Select a site, for example 'BONA'
-bona <- all_humidities %>%
-  filter(siteID  == "BONA")
+rh_summary <- function(x){
+##Select site x'
+site <- all_humidities %>%
+  filter(siteID  == x)
 ##Filter for dates at which there is at least one richness or abundance observation
-dates <- bona %>%
+dates <- site %>%
   mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
   mutate("sum.na" = abundance.na + richness.na) %>%
   filter(sum.na %in% c(0,1)) %>%
@@ -54,77 +55,45 @@ maxRH <- NULL
 
 #For loop that calculates the 2 week info, based on the last 2 weeks from each beetle measurement
 for(i in 1:length(dates$date)) {
-  a <- filter(bona, date %in% c(dates$date[i]-0:13 ))
+  a <- filter(site, date %in% c(dates$date[i]-0:13 ))
   meanRH[i] <- mean(a$wssRHMean, na.rm = TRUE)
   minRH[i] <- min(a$wssRHMinimum, na.rm = TRUE)
   maxRH[i] <- max(a$wssRHMaximum, na.rm = TRUE)
 }
 
-bona_final <- bona %>%
+blan_final <- site %>%
   mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
   mutate("sum.na" = abundance.na + richness.na) %>%
   filter(sum.na %in% c(0,1)) %>%
   select(siteID, date, richness, abundance) %>%
   bind_cols("meanRH" = meanRH,"minRH" =  minRH,"maxRH"= maxRH)
 
-```
+print(blan_final)
+}
 
-Some basic EDA
-```{r}
-##Scatterplots of RH metrics and richness/abundance
+compiler <- function() {
+  list <- list() # generate an empty list to store each site's df into
+sites <- unique(targets$siteID) #get vector of each site
+for(i in 1:47) {
+  list[[i]] <- rh_summary(sites[i]) # for loop that generates df with RH data for each site
+}
+df <- NULL # generate empty df to group everything together into
+df <- list[[1]]
+for(i in 1:46){
+  df <- rbind(df, list[[i+1]]) # for loop that adds each site to df
+}
+targets_rh <- df %>% #replace inf and -inf values with Nan
+  mutate("min_inf" = if_else(is.infinite(df$minRH), 0, 1)) %>%
+  mutate("max_inf" = if_else(is.infinite(df$maxRH), 0, 1)) %>%
+  mutate("min_rh" = minRH * min_inf) %>%
+  mutate("max_rh" = maxRH * max_inf) %>%
+  select(-c("min_inf", "max_inf", "minRH", "maxRH"))
 
-bona_final %>%
-  ggplot(aes(x = meanRH, y = richness)) +
-  geom_point() +
-  geom_smooth()
-
-bona_final %>%
-  ggplot(aes(x = minRH, y = richness)) +
-  geom_point() +
-  geom_smooth()
-
-bona_final %>%
-  ggplot(aes(x = maxRH, y = richness)) +
-  geom_point() +
-  geom_smooth()
-
-bona_final %>%
-  ggplot(aes(x = meanRH, y = abundance)) +
-  geom_point() +
-  geom_smooth()
-
-bona_final %>%
-  ggplot(aes(x = minRH, y = abundance)) +
-  geom_point() +
-  geom_smooth()
-
-bona_final %>%
-  ggplot(aes(x = maxRH, y = abundance)) +
-  geom_point() +
-  geom_smooth()
+print(targets_rh)
+}
 
 ```
-
-Looking at distributions
+Get the 'targets + rh data' df
 ```{r}
-bona_final %>%
-  ggplot(aes(x = richness)) +
-  geom_density()
-
-bona_final %>%
-  ggplot(aes(x = abundance)) +
-  geom_density()
-
-bona_final %>%
-  ggplot(aes(x = meanRH)) +
-  geom_density()
-
-bona_final %>%
-  ggplot(aes(x = minRH)) +
-  geom_density()
-
-bona_final %>%
-  ggplot(aes(x = maxRH)) +
-  geom_density()
-
+targets_rh <- compiler()
 ```
