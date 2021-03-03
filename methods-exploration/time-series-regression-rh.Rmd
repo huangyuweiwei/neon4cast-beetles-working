@@ -1,0 +1,154 @@
+---
+title: "time-series-regression-rh"
+author: "HN"
+date: "3/2/2021"
+output: html_document
+---
+
+```{r}
+library(scoringRules)
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+library(neonstore)
+```
+
+```{r message=FALSE}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+In order to fit the regression, first need to gather the RH data, which occurs from lines 33-96
+
+
+Get targets file with added summarized RH data
+```{r}
+# download all of the weather data
+neonstore::neon_download(product="DP4.00001.001")
+##Get humidity table
+humidity <- neon_read(table = "wss_daily_humid-basic", product = "DP4.00001.001")
+all_humidities <- humidity %>%
+  select(date, siteID, wssRHMean, wssRHMinimum, wssRHMaximum) %>%
+  full_join(targets, by = c("date" = "time", "siteID" = "siteID"))
+rh_summary <- function(x){
+##Select site x'
+site <- all_humidities %>%
+  filter(siteID  == x)
+##Filter for dates at which there is at least one richness or abundance observation
+dates <- site %>%
+  mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
+  mutate("sum.na" = abundance.na + richness.na) %>%
+  filter(sum.na %in% c(0,1)) %>%
+  distinct(date)
+
+#Set up vectors to store 2 week info in
+meanRH <- NULL
+minRH <- NULL
+maxRH <- NULL
+
+#For loop that calculates the 2 week info, based on the last 2 weeks from each beetle measurement
+for(i in 1:length(dates$date)) {
+  a <- filter(site, date %in% c(dates$date[i]-0:13 ))
+  meanRH[i] <- mean(a$wssRHMean, na.rm = TRUE)
+  minRH[i] <- min(a$wssRHMinimum, na.rm = TRUE)
+  maxRH[i] <- max(a$wssRHMaximum, na.rm = TRUE)
+}
+
+blan_final <- site %>%
+  mutate("abundance.na" = if_else(is.na(abundance), 1, 0), "richness.na" = if_else(is.na(richness), 1, 0)) %>%
+  mutate("sum.na" = abundance.na + richness.na) %>%
+  filter(sum.na %in% c(0,1)) %>%
+  select(siteID, date, richness, abundance) %>%
+  bind_cols("meanRH" = meanRH,"minRH" =  minRH,"maxRH"= maxRH)
+
+print(blan_final)
+}
+
+compiler <- function() {
+  list <- list() # generate an empty list to store each site's df into
+sites <- unique(targets$siteID) #get vector of each site
+for(i in 1:47) {
+  list[[i]] <- rh_summary(sites[i]) # for loop that generates df with RH data for each site
+}
+df <- NULL # generate empty df to group everything together into
+df <- list[[1]]
+for(i in 1:46){
+  df <- rbind(df, list[[i+1]]) # for loop that adds each site to df
+}
+targets_rh <- df %>% #replace inf and -inf values with Nan
+  mutate("min_inf" = if_else(is.infinite(df$minRH), 0, 1)) %>%
+  mutate("max_inf" = if_else(is.infinite(df$maxRH), 0, 1)) %>%
+  mutate("min_rh" = minRH * min_inf) %>%
+  mutate("max_rh" = maxRH * max_inf) %>%
+  select(-c("min_inf", "max_inf", "minRH", "maxRH"))
+
+print(targets_rh)
+}
+```
+
+Get the 'targets + rh data' df
+```{r}
+targets_rh <- compiler()
+```
+Get into correct format
+```{r}
+targets_ts <- targets_rh %>%
+  select(siteID, date, richness, meanRH) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(date)) %>%
+  separate(iso_week, into = c("year", "week", "day"))  %>%
+  mutate(time = ISOweek::ISOweek2date(paste(year,week, "1", sep = "-")))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+```
+Not filling gaps 
+```{r}
+#targets_tsb <- targets_tsb %>%
+#  group_by_key() %>%
+#  fill_gaps() %>%
+#  tidyr::fill(richness, .direction = "down") 
+```
+Training data from years before 2020
+```{r}
+train <- targets_tsb %>%
+  filter(year(time) < 2020) %>%
+  select(siteID, time, richness, meanRH)
+```
+Fit simple linear models
+```{r}
+fit <- train %>%
+  model(mean = TSLM(richness ~ meanRH),
+        trend = TSLM(richness ~ trend()),
+        mix = TSLM(richness ~ meanRH + trend())) 
+```
+Forecast using predictors (RH values in 2020)
+```{r}
+predictors <- targets_tsb %>%
+  filter(year(time) > 2019)
+
+fc <- fit %>%
+  forecast(new_data = predictors,
+           simulate = TRUE, iterations = 50)
+```
+CRPS Score
+```{r}
+ crsp_score <- fc  %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+```
+Visualize scores by model
+```{r}
+crsp_score %>%
+  ggplot() +
+  geom_boxplot(aes(x = .model, y = crps))
+```
+Visualize Forecast for a given site
+```{r}
+fc %>% filter(siteID == "CPER") %>%
+  autoplot(targets_tsb)
+```
+
