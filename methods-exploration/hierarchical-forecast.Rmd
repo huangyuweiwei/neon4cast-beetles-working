@@ -50,11 +50,11 @@ targets_ts <- targets %>%
   #separate(iso_week, into = c("year", "week", "day")) %>%
   # filter(siteID %in% c("DSNY", "OSBS"))
 
-targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+targets_tsb_all <- as_tsibble(targets_ts, key = siteID, index = time)
 ```
 
 ```{r}
-targets_tsb <- targets_tsb %>%
+targets_tsb <- targets_tsb_all %>%
   aggregate_key(field_domain_id/siteID, richness = sum(richness)) %>%
   fill_gaps() %>%
   tidyr::fill(richness, .direction = "down") %>%
@@ -73,3 +73,124 @@ targets_tsb %>%
 ```
 
 # Bottom up approaches:
+
+Suppose we want aggregate and domain forecasts for the richness, but we aren’t interested in disaggregations using siteID. 
+
+create a simple tsibble object containing only state and national trip totals for each quarter.
+
+```{r}
+richness_domains <- targets_tsb_all %>%
+  aggregate_key(field_domain_id, richness = sum(richness)) %>%
+  fill_gaps() %>%
+  tidyr::fill(richness, .direction = "down") 
+```
+
+generate the bottom-level state forecasts first, and then sum them to obtain the aggregate forecasts:
+
+```{r}
+fcasts_domain <- richness_domains %>%
+  filter(!is_aggregated(field_domain_id)) %>%
+  model(arima = ARIMA(richness)) %>%
+  forecast()
+```
+
+Sum bottom-level forecasts to get top-level forecasts
+```{r}
+fcasts_all <- fcasts_domain %>%
+  summarise(value = sum(richness), .mean = mean(value))
+```
+
+Or use reconcile function (more general approach)
+
+```{r}
+richness_domains %>%
+  model(arima = ARIMA(richness)) %>%
+  reconcile(bu = bottom_up(arima)) %>%
+  forecast()
+```
+
+Top down (a few differerent ways- see 11.3 for explanations)
+```{r}
+richness_domains %>%
+  model(arima = ARIMA(richness)) %>%
+  reconcile(bu = top_down(arima, method = "forecast_proportions")) %>%
+  forecast()
+```
+
+```{r}
+richness_domains %>%
+  model(arima = ARIMA(richness)) %>%
+  reconcile(bu = top_down(arima, method = "average_proportions")) %>%
+  forecast()
+```
+
+```{r}
+richness_domains %>%
+  model(arima = ARIMA(richness)) %>%
+  reconcile(bu = top_down(arima, method = "proportion_averages")) %>%
+  forecast()
+```
+
+The reconcile() step  created a new “model” to produce bottom-up forecasts. 
+
+The fable object contains the ets forecasts as well as the coherent bu forecasts, for each of the domains and the aggregate. At the domain level, these forecasts are identical, but the national arima forecasts will be different from the national bu forecasts.
+
+For bottom-up forecasting, this is rather inefficient as we are not interested in the ETS model for the national total, and the resulting fable contains a lot of duplicates. 
+
+
+# Back on task 
+
+```{r}
+richness_all <- targets_tsb_all %>%
+  fill_gaps() %>%
+  tidyr::fill(richness, .direction = "down") %>%
+  aggregate_key(field_domain_id/siteID, richness = sum(richness)) 
+
+
+fit <- richness_all %>%
+  fill_gaps() %>%
+  filter(year(time) <= 2019) %>%
+  model(base = ARIMA(richness)) %>%
+  reconcile(
+    bu = bottom_up(base))
+    #ols = min_trace(base, method = "ols"),
+    #td = top_down(base, method = "proportion_averages"),
+  #)
+```
+
+```{r}
+fc <- fit %>% forecast(h = "1 year")
+```
+
+```{r}
+fc %>%
+  filter(!is_aggregated(field_domain_id), is_aggregated(siteID)) %>%
+  autoplot(
+    richness_all %>% filter(year(time) >= 2014),
+    level = NULL
+  ) +
+  labs(y = "richness") +
+  facet_wrap(vars(field_domain_id), scales = "free_y")
+```
+
+```{r}
+fc %>%
+  filter(is_aggregated(field_domain_id), is_aggregated(siteID)) %>%
+  accuracy(
+    data = richness_all,
+    measures = list(rmse = RMSE, mase = MASE)
+  ) %>%
+  group_by(.model) %>%
+  summarise(rmse = mean(rmse), mase = mean(mase))
+```
+
+
+General steps:
+
+(1) Begin with a tsibble object (here labelled data) containing the individual bottom-level series.
+(2) Define in aggregate_key() the aggregation structure and build a tsibble object that also contains the aggregate series.
+(3) Identify a model() for each series, at all levels of aggregation.
+Specify in reconcile() how the coherent forecasts are to be generated from the selected models.
+(4) Use the forecast() function to generate forecasts for the whole aggregation structure.
+
+# Top down approaches
