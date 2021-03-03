@@ -1,0 +1,75 @@
+---
+title: "Hierarchical time series"
+output: github_notebook
+---
+
+```{r message=FALSE}
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+```
+
+Explore other simple forecasting methods
+
+```{r message=FALSE}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+
+add an intermediate aggregation level
+
+```{r}
+neon_sites <- read_csv("../NEON_Field_Site_Metadata.csv") %>%
+  select(field_domain_id, field_site_id) %>%
+  rename(siteID = field_site_id)
+```
+
+```{r}
+targets <- targets %>%
+  left_join(neon_sites, by = "siteID")
+```
+
+
+Make tsibble! (richness data)
+```{r}
+targets_ts <- targets %>%
+  select(siteID, time, field_domain_id, richness) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
+  separate(iso_week, into = c("year", "week", "day")) %>%
+  mutate(time = as.Date(time)) #%>%
+ # mutate(time = yearmonth(time)) %>% #month year to start...
+ # group_by(time, siteID) %>%
+ # summarise(richness = mean(richness, na.rm = TRUE))
+  #separate(iso_week, into = c("year", "week", "day")) %>%
+  # filter(siteID %in% c("DSNY", "OSBS"))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+```
+
+```{r}
+targets_tsb <- targets_tsb %>%
+  aggregate_key(field_domain_id/siteID, richness = sum(richness)) %>%
+  fill_gaps() %>%
+  tidyr::fill(richness, .direction = "down") %>%
+  filter(year(time) < 2020)
+```
+
+
+```{r}
+targets_tsb %>%
+  filter(is_aggregated(siteID)) %>%
+  autoplot(richness) +
+  labs(y = "richness",
+       title = "richness: site domains") +
+  facet_wrap(vars(field_domain_id), scales = "free_y", ncol = 3) +
+  theme(legend.position = "none")
+```
+
+# Bottom up approaches:
