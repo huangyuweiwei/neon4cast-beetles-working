@@ -1,0 +1,140 @@
+---
+title: "forecasting-HN"
+author: "HN"
+date: "3/8/2021"
+output: html_document
+---
+```{r}
+library(scoringRules)
+library(tidyverse)
+library(ISOweek) 
+library(forecast)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+library(neonstore)
+```
+Download beetle data
+```{r message=FALSE}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+targets <-  read_csv("beetles-targets.csv.gz")
+```
+Download Humidity data
+```{r}
+##Get humidity table
+humidity <- neon_read(table = "wss_daily_humid-basic", product = "DP4.00001.001")
+```
+Summarize humidity data
+  note: some weeks don't have humidity data, forcing the min/max fns to produce inf and -inf values, this produces a lot of warning messages when run
+```{r}
+mean_humidity <- humidity %>%
+  mutate(iso_week = ISOweek::date2ISOweek(date)) %>%
+  mutate(date = as.Date(date)) %>%
+  mutate(time = yearweek(date)) %>%
+  group_by(siteID, time) %>%
+  summarise(mean_humidity = mean(wssRHMean, na.rm = TRUE), min_humidity = min(wssRHMinimum, na.rm = TRUE), max_humidity = max(wssRHMaximum, na.rm = TRUE))
+```
+Join humidity and beetle/targets data
+```{r}
+targets_plusRH <- left_join(targets, mean_humidity, by = c("time", "siteID"))
+```
+
+```{r}
+targets_ts <- targets_plusRH %>%
+  select(siteID, time, richness, abundance, mean_humidity, min_humidity, max_humidity) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
+  separate(iso_week, into = c("year", "week", "day"))  %>%
+  mutate(time = ISOweek::ISOweek2date(paste(year,week, "1", sep = "-")))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+```
+
+Check predictors
+```{r}
+targets_tsb %>%
+  GGally::ggpairs(columns = 5:7)
+#mean, min, and max are all fairly correlated
+#Somewhat arbitrarily selecting meanRH as a predictor variable
+```
+Training data from years before 2020
+```{r}
+train <- targets_tsb %>%
+  filter(year(time) < 2020) %>%
+  select(siteID, time, richness, abundance, mean_humidity, min_humidity, max_humidity)
+```
+
+Fit simple linear models
+```{r}
+fit <- train %>%
+  model(mean = TSLM(richness ~ mean_humidity),
+        trend = TSLM(richness ~ trend()),
+        mix = TSLM(richness ~ mean_humidity + trend())) 
+a_fit <- train %>%
+  model(mean = TSLM(abundance ~ mean_humidity),
+        trend = TSLM(abundance ~ trend()),
+        mix = TSLM(abundance ~ mean_humidity + trend()))
+```
+Forecast using predictors (RH values in 2020)
+```{r}
+predictors <- targets_tsb %>%
+  filter(year(time) > 2019)
+
+fc <- fit %>%
+  forecast(new_data = predictors,
+           simulate = TRUE, iterations = 50)
+a_fc <- a_fit %>%
+  forecast(new_data = predictors,
+           simulate = TRUE, iterations = 50)
+```
+CRPS Score
+```{r}
+ crsp_score <- fc  %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+a_crsp_score <- a_fc %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+```
+Visualize scores by model
+```{r}
+crsp_score %>%
+  ggplot() +
+  geom_boxplot(aes(x = .model, y = crps))
+a_crsp_score %>%
+  ggplot() +
+  geom_boxplot(aes(x = .model, y = crps))
+```
+Other scores
+```{r}
+score <- fc  %>%
+  accuracy(targets_tsb, measures = list(point_accuracy_measures,interval_accuracy_measures, distribution_accuracy_measures))
+
+score %>%
+  group_by(.model) %>%
+  summarise(RMSE = mean(RMSE, na.rm = T),
+            MAE = mean(MAE, na.rm = T),
+            CRPS = mean(CRPS, na.rm = T)) %>%
+  arrange(CRPS)
+```
+
+Visualize at a given site
+```{r}
+targets_tsb %>%
+  filter(siteID == "CPER") %>%
+  autoplot(richness) +
+  fc %>% filter(siteID == "CPER") %>% autolayer()
+```
+Visualize model
+```{r}
+augment(fit) %>%
+  ggplot(aes(x = richness, y = .fitted)) +
+  geom_point() +
+  labs(
+    y = "fitted (predicted values)",
+    x = "Data (actual values)",
+    title = "Richness"
+  ) +
+  geom_abline(intercept = 0, slope = 1)
+```
