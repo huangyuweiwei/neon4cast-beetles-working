@@ -1,0 +1,58 @@
+---
+title: "Untitled"
+author: "Kari Norman"
+date: "3/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## Get the latest beetle target data.  
+download.file("https://data.ecoforecast.org/targets/beetles/beetles-targets.csv.gz",
+              "beetles-targets.csv.gz")
+
+target_ts <-  read_csv("beetles-targets.csv.gz") %>%
+  as_tsibble(key = siteID, index = time)
+```
+
+We need to fill in gaps within the sampling period and set non-sample timespans to zero
+```{r}
+# get a dataframe of the implicit gaps, 
+# filter for big gaps that indicate the yearly sampling break for winter
+# still not sure what to do with big gaps that indicate no sampling for more than a year 
+gaps <- target_ts %>%
+  count_gaps() %>%
+  filter(.n > 10) %>%
+  mutate(interval = interval(.from, .to)) %>%
+  select(-c(.to, .from, .n))
+  
+
+target_ts_fill <- target_ts %>%
+  group_by_key() %>%
+  fill_gaps() %>% #get all the time points that should exist but don't
+  as_tibble() %>%
+  full_join(gaps) %>% #get the interval data
+  #get an indicator column that shows whether the date is in a winter interval for that site
+  mutate(winter_samp = if_else(time %within% interval, TRUE, FALSE)) %>% 
+  group_by(siteID, time) %>% 
+  #if data is in any interval, treat it as a winter sample
+  mutate(winter_samp = ifelse(sum(winter_samp) == 1, TRUE, FALSE)) %>%
+  select(-interval) %>%
+  distinct() %>%
+  # if it's winter, make abudance and richness 0 instead of NA %>%
+  mutate(abundance = ifelse(isTRUE(winter_samp), 0, abundance),
+         richness = ifelse(isTRUE(winter_samp), 0, richness)) %>%
+  select(-winter_samp) %>% 
+  group_by(siteID) %>%
+  #interpolate all other NA's (within the sampling period) based on values that come before and after
+  mutate(abundance_interp = na.interp(abundance),
+         richness_interp = na.interp(richness)) %>%
+  as_tsibble(key = siteID, index = time)
+
+autoplot(target_ts_fill, abundance)
+autoplot(target_ts_fill, abundance_interp)
+```
+
