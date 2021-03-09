@@ -42,7 +42,7 @@ head(precip)
 ```{r}
 # looking into iso week breakdown
 targets %>%
-  filter(siteID=="ABBY") %>%
+  filter(siteID=="BONA") %>%
   mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
   mutate(time = as.Date(time))
 ```
@@ -52,11 +52,13 @@ targets %>%
 targets_ts <- targets %>%
   select(siteID, time, abundance) %>%
   mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
-  mutate(time = as.Date(time)) %>%
+  #mutate(time = as.Date(time)) %>%
   #mutate(time = yearmonth(time)) %>% #month year to start...
-  mutate(time = yearweek(time)) %>%
-  group_by(time, siteID) %>%
-  summarise(abundance = mean(abundance, na.rm = TRUE))
+  #mutate(time = yearweek(time)) %>%
+  separate(iso_week, into = c("year", "week", "day"))  %>%
+  mutate(time = ISOweek::ISOweek2date(paste(year,week, "1", sep = "-")))
+  #group_by(time, siteID) %>%
+  #summarise(abundance = mean(abundance, na.rm = TRUE))
 
 #test <- as_tbl_time(targets, key = siteID, index = time)
 
@@ -82,9 +84,9 @@ interval_pull(targets_tsb$time)
 
 ```{r}
 targets_tsb %>%
-  filter(siteID == "ABBY") %>%
+  filter(siteID == "BART") %>%
   autoplot(abundance) +
-  labs(x = "time", title = "Abundance for ABBY")
+  labs(x = "time", title = "Abundance for BART")
 ```
 
 ### Define a model (specify)
@@ -93,9 +95,10 @@ targets_tsb %>%
 ```{r}
 train <- targets_tsb %>%
   group_by_key() %>%
-  fill_gaps() %>%
-  tidyr::fill(abundance, .direction = "down") %>%
-  filter(year(time) < 2019)
+  #fill_gaps() %>%
+  #tidyr::fill(abundance, .direction = "down") %>%
+  filter(year(time) < 2020) %>%
+  select(siteID, time, abundance)
 ```
 
 
@@ -111,33 +114,23 @@ fit
 
 ### Produce forecasts (forecast)
 ```{r}
-fit %>% forecast(h = "12 months")
+fc <- fit %>% forecast(h = "12 months")
 ```
 
 ```{r}
 fit %>%
   forecast(h = "12 months") %>%
-  filter(siteID == "ABBY") %>%
+  filter(siteID == "BART") %>%
   autoplot(train, level=NULL) +
-  labs(x = "time", title = "Abundance for ABBY")
+  labs(x = "time", title = "Abundance for BART")
 ```
 
 ```{r}
-fc_accuracy <- accuracy(fit, train)
+crsp_score <- fc %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+crsp_score
 ```
 
-```{r}
-fc_accuracy %>%
-  group_by(.model) %>%
-  summarise(
-    RMSE = mean(RMSE),
-    MAE = mean(MAE),
-    MASE = mean(MASE),
-    Winkler = mean(winkler),
-    CRPS = mean(CRPS)
-  ) %>%
-  arrange(RMSE)
-```
 
 ### Filling Gaps in Data
 "Satellite time series are often affected by permanent gaps like missing observations during winter periods. Often time series methods can not deal with missing observations and require gap-free data. This function fills winter gaps with a constant fill value or according to the approach described in Beck et al. (2006)."
@@ -149,60 +142,100 @@ https://greenbrown.r-forge.r-project.org/man/FillPermanentGaps.html
 ## Including a Predictor (Precipitation)
 
 ```{r}
-konz_precip <- precip %>% 
-  filter(siteID == "KONZ")
-konz_precip
-```
-
-
-
-```{r}
-mean_precip <- precip %>%
-  mutate(iso_week = ISOweek::date2ISOweek(date)) %>%
-  mutate(date = as.Date(date)) %>%
-  mutate(time = yearweek(date)) %>%
-  group_by(siteID, time) %>%
-  summarise(mean_precip = mean(wssPrecipTotal))
-mean_precip
-```
-
-```{r}
-bona_precip <- mean_precip %>%
+bona_precip <- precip %>% 
   filter(siteID == "BONA")
 bona_precip
 ```
 
+Precipitation doesn't seem like a very strong predictor. 
 ```{r}
-bona_abund <- targets_tsb %>%
-  filter(siteID == "BONA")
-bona_abund
+targets_tsb %>%
+  GGally::ggpairs(columns = 3:6)
+```
 
-bona_abund_precip <- inner_join(bona_precip, bona_abund, by="time")
-bona_abund_precip
+
+```{r}
+precip_summary <- precip %>%
+  mutate(iso_week = ISOweek::date2ISOweek(date)) %>%
+  mutate(time = as.Date(date)) %>%
+  mutate(time = yearweek(date)) %>%
+  group_by(siteID, time) %>%
+  summarise(avg_precip = mean(wssPrecipTotal, na.rm = TRUE), min_precip = min(wssPrecipTotal, na.rm = TRUE), max_precip = max(wssPrecipTotal, na.rm = TRUE))
 ```
 
 ```{r}
-bona_abund_precip_tsb <- as_tsibble(bona_abund_precip, key = siteID.x, index = time)
+beetle_precip <- left_join(targets, precip_summary, by = c("time", "siteID"))
+beetle_precip
+```
+```{r}
+beetle_precip %>%
+  ggplot(aes(x = avg_precip, y = abundance)) +
+  labs(y = "Average Precipitation",
+       x = "Abundance") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
 
+```{r}
+targets_ts <- beetle_precip %>%
+  select(siteID, time, abundance, avg_precip, min_precip, max_precip) %>%
+  mutate(iso_week = ISOweek::date2ISOweek(time)) %>%
+  separate(iso_week, into = c("year", "week", "day"))  %>%
+  mutate(time = ISOweek::ISOweek2date(paste(year,week, "1", sep = "-")))
+
+targets_tsb <- as_tsibble(targets_ts, key = siteID, index = time)
+```
+
+```{r}
+train <- targets_tsb %>%
+  group_by_key() %>%
+  #fill_gaps() %>%
+  #tidyr::fill(abundance, .direction = "down") %>%
+  filter(year(time) < 2020) %>%
+  select(siteID, time, abundance, avg_precip, min_precip, max_precip)
+```
+
+```{r}
+fit <- train %>%
+  model(
+    mean = TSLM(abundance ~ avg_precip)
+  ) 
+fit
+```
+
+Create some forecasts! 
+```{r}
+predictors <- targets_tsb %>%
+  filter(year(time) > 2019)
+
+fc <- fit %>%
+  forecast(new_data = predictors,
+           simulate = TRUE, iterations = 50)
+
+
+fit %>%
+  forecast(new_data = predictors, h="12 months") %>%
+  filter(siteID == "CPER") %>%
+  autoplot(train, level=NULL) +
+  labs(x = "time", title = "Abundance for CPER")
+
+```
+
+```{r}
+crsp_score <- fc  %>%
+  accuracy(targets_tsb, list(crps = CRPS))
+crsp_score
+```
+```{r}
+length(unique(beetle_precip$siteID))
+```
+
+
+```{r}
 targets_tsb %>%
   filter(siteID == "BONA") %>%
-  autoplot(abundance)
-
-
+  autoplot(abundance) 
 ```
-
-```{r}
-fit_bona <- bona_abund_precip_tsb %>%
-  model(TSLM(abundance ~ trend() + fourier(K = 2)))
-report(fit_bona)
-```
-
-```{r}
-bona_fc <- forecast(bona_fit)
-bona_fc %>% 
-  autoplot(bona_abund_precip_tsb)
-```
-
 
 
 # Exponential Smoothing 
@@ -225,7 +258,7 @@ fc %>%
   filter(siteID == "ABBY")) +
   geom_line(aes(y = .fitted), col="red", 
             data = augment(fit)) +
-  labs(y="% of GDP", title="Exports: Algeria") +
+  labs(y="Abundance", title="ABBY Abundance") +
   guides(colour = FALSE)
 
 ```
@@ -234,9 +267,14 @@ fc %>%
 fit <- train %>%
   filter(siteID == "ABBY") %>%
   model(
-    AAN = ETS(abundance ~ error("A") + trend("A") + season("N"))
+    AAN = ETS(abundance ~ error(method = c("A", "M")) + trend(c("N", "A", "Ad")) + season(c("N", "A", "M"), period = "2 weeks"))
   )
-fc <- fit %>% forecast(h = 15)
+fc <- fit %>% forecast(h = "1 year")
+fc %>% autoplot(targets_tsb %>%
+  filter(siteID == "ABBY")) +
+  labs(title = "Forecasts from Holt's method",
+       y = "Population of Australia (millions)") +
+  guides(colour = guide_legend(title = "Forecast"))
 
 
 train %>%
@@ -245,11 +283,11 @@ train %>%
     `Holt's method` = ETS(abundance ~ error("A") + 
                        trend("A") + season("N")),
     `Damped Holt's method` = ETS(abundance ~ error("A") + 
-                       trend("Ad", phi = 0.9) + season("N"))
+                       trend("Ad", phi = 0.98) + season("N"))
   ) %>%
   forecast(h = "1 year") %>%
   autoplot(targets_tsb %>%
-  filter(siteID == "ABBY")) +
+  filter(siteID == "ABBY"), level=NULL) +
   labs(title = "Forecasts from Holt's method",
        y = "Population of Australia (millions)") +
   guides(colour = guide_legend(title = "Forecast"))
@@ -273,17 +311,20 @@ train %>%
 ```{r}
 fit <- train %>%
   filter(siteID == "ABBY") %>%
-  model(
+  model(SES = ETS(abundance ~ error("A") + trend("N") + season("N")),
+    Holt = ETS(abundance ~ error("A") + trend("A") + season("N")),
     Damped = ETS(abundance ~ error("A") + trend("Ad") + 
                    season("N"))
   )
+tidy(fit)
+
 ```
 
 
 ```{r}
 fit %>%
   forecast(h = "1 year") %>%
-  autoplot(targets_tsb) +
+  autoplot(targets_tsb, level = NULL) +
   labs(x="Time", y="Abundance")
 
 ```
@@ -294,12 +335,14 @@ abby_abund <- train %>%
   summarise(abundance = mean(abundance))
 
 fit <- abby_abund %>%
-  model(
-    hw = ETS(abundance ~ error(c("A", "M")) + trend(c("N", "A", "Ad")) + 
+  model(additive = ETS(abundance ~ error("A") + trend("A") + 
+                                                season("A", period = "1 month")),
+    additive = ETS(abundance ~ error(c("A", "M")) + trend(c("N", "A", "Ad")) + 
                                                 season(c("N", "A", "M"), period = "2 weeks"))
   )
 
-fc <- fit %>% forecast(h = "1 year")
+fc <- fit %>% forecast(h = "52 weeks")
+
 fc %>%
   autoplot(abby_abund, level = NULL) +
   labs(y="Abundance") +
