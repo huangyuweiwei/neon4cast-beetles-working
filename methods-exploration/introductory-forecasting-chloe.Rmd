@@ -163,6 +163,7 @@ precip_summary <- precip %>%
   summarise(avg_precip = mean(wssPrecipTotal, na.rm = TRUE), min_precip = min(wssPrecipTotal, na.rm = TRUE), max_precip = max(wssPrecipTotal, na.rm = TRUE))
 ```
 
+Joined beetles and precipitation data. 
 ```{r}
 beetle_precip <- left_join(targets, precip_summary, by = c("time", "siteID"))
 beetle_precip
@@ -220,7 +221,7 @@ fit %>%
   labs(x = "time", title = "Abundance for CPER")
 
 ```
-
+Score the forecast.
 ```{r}
 crsp_score <- fc  %>%
   accuracy(targets_tsb, list(crps = CRPS))
